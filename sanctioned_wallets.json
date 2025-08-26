@@ -543,7 +543,6 @@
     "0xa7e5d5a720f06526557c513402f2e6b5fa20b008",
     "0xb338962B92CD818D6aef0A32a9ECD01212a71f33",
     "0xb6f5ec1a0a9cd1526536d3f0426c429529471f40",
-    "0xc2a3829F459B3Edd87791c74cD45402BA0a20Be3",
     "0xc455f7fd3e0e12afd51fba5c106909934d8a0e4a",
     "0xd0975b32cea532eadddfc9c60481976e39db3472",
     "0xd5ED34b52AC4ab84d8FA8A231a3218bbF01Ed510",
@@ -657,3 +656,4 @@
   "description": "Local sanctioned wallets list - Akhilesh Chandra",
   "total_count": 10
 }
+
