@@ -123,36 +123,7 @@ class SanctionedWalletResponse(BaseModel):
 	total_count: int
 
 
-class BitqueryTransfersRequest(BaseModel):
-	network: str = Field(default="eth", description="Bitquery network, e.g., eth")
-	tokenAddresses: Optional[List[str]] = Field(default=None, description="Filter by token contract addresses")
-	limit: int = Field(default=50, ge=1, le=200)
-
-class BitqueryTransferRow(BaseModel):
-	token_symbol: str
-	amount: float
-	sender: str
-	receiver: str
-	timestamp: str
-
-class EtherscanWalletRequest(BaseModel):
-	address: str
-
-class EtherscanTxRow(BaseModel):
-	hash: str
-	timeStamp: str
-	value_eth: float
-	from_addr: str
-	to_addr: Optional[str]
-	isError: bool
-
-class EtherscanWalletResponse(BaseModel):
-	address: str
-	tx_count: int
-	first_tx_time: Optional[str]
-	failed_ratio: float
-	risk_rating: int
-	txs: List[EtherscanTxRow]
+## (Removed auxiliary models for deleted endpoints)
 
 
 app = FastAPI(
@@ -843,113 +814,10 @@ async def check_sanctions_status(address: str, partner_id: str = Depends(get_par
 		raise HTTPException(status_code=500, detail=f"Failed to check sanctions status: {str(e)}")
 
 
-@app.post("/v1/wallet/assess", response_model=WalletRiskAssessmentResponse)
-async def assess_wallet_risk(
-    request: WalletRiskAssessmentRequest,
-    partner_id: str = Depends(get_partner_id_from_api_key)
-):
-    """Assess wallet risk without adding to sanctions"""
-    
-    try:
-        address = request.address.lower()
-        
-        logger.info(f"Wallet risk assessment request for {address} by {partner_id}")
-        
-        # Validate address format
-        if not wallet_risk_assessor.is_valid_address(address):
-            raise HTTPException(status_code=400, detail="Invalid address format")
-        
-        # Perform comprehensive risk assessment
-        risk_profile = await wallet_risk_assessor.assess_wallet_risk(address, request.chain)
-        
-        # Determine risk band
-        if risk_profile.risk_score >= 90:
-            risk_band = "CRITICAL"
-        elif risk_profile.risk_score >= 80:
-            risk_band = "HIGH"
-        elif risk_profile.risk_score >= 60:
-            risk_band = "MEDIUM"
-        elif risk_profile.risk_score >= 40:
-            risk_band = "ELEVATED"
-        else:
-            risk_band = "LOW"
-        
-        # Generate recommendation
-        if risk_profile.risk_score >= 80:
-            recommendation = "BLOCK - High risk wallet detected"
-        elif risk_profile.risk_score >= 60:
-            recommendation = "MONITOR - Elevated risk, consider additional screening"
-        elif risk_profile.risk_score >= 40:
-            recommendation = "REVIEW - Moderate risk, standard screening recommended"
-        else:
-            recommendation = "ALLOW - Low risk wallet"
-        
-        # Log the assessment for audit
-        await audit_logger.log_sanctions_action(
-            partner_id=partner_id,
-            action="ASSESS",
-            address=address,
-            risk_score=risk_profile.risk_score,
-            risk_factors=risk_profile.risk_factors,
-            data_sources=risk_profile.data_sources,
-            reason="Risk assessment request"
-        )
-        
-        return WalletRiskAssessmentResponse(
-            address=address,
-            risk_score=risk_profile.risk_score,
-            risk_band=risk_band,
-            risk_factors=risk_profile.risk_factors,
-            confidence=risk_profile.confidence,
-            data_sources=risk_profile.data_sources,
-            transaction_count=risk_profile.transaction_count,
-            total_volume=risk_profile.total_volume,
-            last_activity=risk_profile.last_activity,
-            suspicious_patterns=risk_profile.suspicious_patterns,
-            assessment_timestamp=risk_profile.assessment_timestamp,
-            recommendation=recommendation
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Wallet risk assessment error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+## (Removed endpoint POST /v1/wallet/assess)
 
 
-@app.get("/v1/sanctions/stats")
-async def get_sanctions_stats(partner_id: str = Depends(get_partner_id_from_api_key)):
-	"""Get statistics about the sanctions list"""
-	try:
-		total_count = sanctions_checker.get_sanctioned_count()
-		
-		# Read the JSON file to get additional stats
-		import json
-		from pathlib import Path
-		
-		file_path = Path(__file__).parent.parent / "sanctioned_wallets.json"
-		if file_path.exists():
-			with open(file_path, 'r', encoding='utf-8') as f:
-				data = json.load(f)
-			
-			last_updated = data.get("last_updated", "")
-			description = data.get("description", "")
-		else:
-			last_updated = ""
-			description = ""
-		
-		return {
-			"total_sanctioned_addresses": total_count,
-			"last_updated": last_updated,
-			"description": description,
-			"file_path": str(file_path),
-			"file_exists": file_path.exists(),
-			"checked_at": now_iso()
-		}
-		
-	except Exception as e:
-		print(f"Error getting sanctions stats: {e}")
-		raise HTTPException(status_code=500, detail=f"Failed to retrieve sanctions stats: {str(e)}")
+## (Removed endpoint GET /v1/sanctions/stats)
 
 
 @app.get("/v1/audit/logs")
@@ -1009,39 +877,7 @@ async def get_audit_summary(partner_id: str = Depends(get_partner_id_from_api_ke
         raise HTTPException(status_code=500, detail="Failed to generate audit summary")
 
 
-@app.post("/v1/confirmation/generate")
-async def generate_confirmation_code(
-    address: str,
-    action: str,
-    partner_id: str = Depends(get_partner_id_from_api_key)
-):
-    """Generate a confirmation code for sanctions removal"""
-    
-    try:
-        if action not in ["remove"]:
-            raise HTTPException(status_code=400, detail="Confirmation codes only available for removal actions")
-        
-        # Validate address format
-        if not wallet_risk_assessor.is_valid_address(address):
-            raise HTTPException(status_code=400, detail="Invalid address format")
-        
-        # Generate confirmation code
-        confirmation_code = confirmation_system.generate_confirmation_code(partner_id, address, action)
-        
-        return {
-            "success": True,
-            "confirmation_code": confirmation_code,
-            "address": address,
-            "action": action,
-            "expires_in": "1 hour",
-            "message": "Use this confirmation code when removing the address from sanctions"
-        }
-        
-    except Exception as e:
-        logger.error(f"Error generating confirmation code: {e}")
-        if "Rate limit exceeded" in str(e):
-            raise HTTPException(status_code=429, detail="Too many confirmation code requests. Please wait before requesting another.")
-        raise HTTPException(status_code=500, detail="Failed to generate confirmation code")
+## (Removed endpoint POST /v1/confirmation/generate)
 
 
 if __name__ == "__main__":
