@@ -1047,7 +1047,7 @@ async def generate_confirmation_code(
 @app.post("/v1/bitquery/transfers", response_model=List[BitqueryTransferRow])
 async def bitquery_transfers(body: BitqueryTransfersRequest, partner_id: str = Depends(get_partner_id_from_api_key)):
 	"""Proxy Bitquery streaming GraphQL to fetch recent token transfers (e.g., USDC/USDT)."""
-	access_token = get_secret("BITQUERY_ACCESS_TOKEN", env_var="BITQUERY_ACCESS_TOKEN")
+	access_token = get_secret("BITQUERY_TOKEN", env_var="BITQUERY_TOKEN")
 	if not access_token:
 		raise HTTPException(status_code=500, detail="Missing Bitquery access token")
 	try:
