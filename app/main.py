@@ -630,162 +630,72 @@ async def get_sanctions_list(partner_id: str = Depends(get_partner_id_from_api_k
 		raise HTTPException(status_code=500, detail=f"Failed to retrieve sanctions list: {str(e)}")
 
 
-@app.post("/v1/sanctions/manage", response_model=SanctionsResponse)
+# Updated sanctions manage: path param address; body optional reason; only 'add'
+@app.post("/v1/sanctions/manage/{address}", response_model=SanctionsResponse)
 async def manage_sanctions(
-    request: SanctionsManageRequest,
-    partner_id: str = Depends(get_partner_id_from_api_key)
+	address: str,
+	request: SanctionsManageRequest,
+	partner_id: str = Depends(get_partner_id_from_api_key)
 ):
-    """Secure sanctions management with risk validation and audit logging"""
-    
-    try:
-        address = request.address.lower()
-        action = request.action.lower()
-        
-        logger.info(f"Sanctions management request: {action} for {address} by {partner_id}")
-        
-        # Validate address format using the risk assessor
-        if not wallet_risk_assessor.is_valid_address(address):
-            raise HTTPException(status_code=400, detail="Invalid address format")
-        
-        # Check if address is currently sanctioned
-        is_currently_sanctioned = sanctions_checker.is_sanctioned(address)
-        
-        if action == "add":
-            if is_currently_sanctioned:
-                return SanctionsResponse(
-                    success=False,
-                    message=f"Address {address} is already in sanctions list",
-                    address=address,
-                    action=action,
-                    total_count=sanctions_checker.get_sanctioned_count()
-                )
-            
-            # CRITICAL: Validate wallet before adding to sanctions
-            logger.info(f"Starting risk assessment for {address}")
-            risk_profile = await wallet_risk_assessor.assess_wallet_risk(address, request.chain)
-            
-            # Security checks
-            if risk_profile.risk_score < 70:  # Require high risk for sanctions
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Address {address} has insufficient risk (score: {risk_profile.risk_score}) to be sanctioned. Minimum required: 70"
-                )
-            
-            if risk_profile.confidence < 0.6:  # Require good data quality
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Insufficient data confidence ({risk_profile.confidence:.2f}) for {address}. Cannot safely sanction."
-                )
-            
-            # Check if admin approval is required
-            if confirmation_system.require_admin_approval(partner_id, address, risk_profile.risk_score):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Admin approval required for this sanctions operation. Contact support."
-                )
-            
-            # Log the risk assessment
-            logger.info(f"Risk assessment for {address}: Score={risk_profile.risk_score}, Confidence={risk_profile.confidence}")
-            
-            # Add to sanctions with risk metadata
-            success = sanctions_checker.add_sanctioned_address(address)
-            
-            if success:
-                # Log the action for audit
-                await audit_logger.log_sanctions_action(
-                    partner_id=partner_id,
-                    action="ADD",
-                    address=address,
-                    risk_score=risk_profile.risk_score,
-                    risk_factors=risk_profile.risk_factors,
-                    data_sources=risk_profile.data_sources,
-                    reason=request.reason
-                )
-                
-                return SanctionsResponse(
-                    success=True,
-                    message=f"Address {address} added to sanctions list",
-                    address=address,
-                    action=action,
-                    risk_profile={
-                        "risk_score": risk_profile.risk_score,
-                        "confidence": risk_profile.confidence,
-                        "risk_factors": risk_profile.risk_factors,
-                        "data_sources": risk_profile.data_sources,
-                        "transaction_count": risk_profile.transaction_count,
-                        "total_volume": risk_profile.total_volume,
-                        "last_activity": risk_profile.last_activity,
-                        "suspicious_patterns": risk_profile.suspicious_patterns
-                    },
-                    total_count=sanctions_checker.get_sanctioned_count()
-                )
-            else:
-                raise HTTPException(status_code=500, detail="Failed to add address to sanctions list")
-                
-        elif action == "remove":
-            if not is_currently_sanctioned:
-                return SanctionsResponse(
-                    success=False,
-                    message=f"Address {address} is not in sanctions list",
-                    address=address,
-                    action=action,
-                    total_count=sanctions_checker.get_sanctioned_count()
-                )
-            
-            # CRITICAL: Additional validation before removal
-            current_risk = await wallet_risk_assessor.assess_wallet_risk(address, request.chain)
-            
-            # Only allow removal if risk has significantly decreased
-            if current_risk.risk_score > 30:  # Still risky
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Cannot remove {address} - still has high risk (score: {current_risk.risk_score})"
-                )
-            
-            # Require additional confirmation for removal
-            if not request.confirmation_code:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Removal requires confirmation code for security"
-                )
-            
-            # Verify confirmation code
-            is_valid, message = confirmation_system.verify_confirmation_code(
-                request.confirmation_code, partner_id, address, action
-            )
-            
-            if not is_valid:
-                raise HTTPException(status_code=400, detail=f"Invalid confirmation code: {message}")
-            
-            success = sanctions_checker.remove_sanctioned_address(address)
-            
-            if success:
-                # Log the removal action
-                await audit_logger.log_sanctions_action(
-                    partner_id=partner_id,
-                    action="REMOVE",
-                    address=address,
-                    risk_score=current_risk.risk_score,
-                    risk_factors=current_risk.risk_factors,
-                    data_sources=current_risk.data_sources,
-                    reason=request.reason
-                )
-                
-                return SanctionsResponse(
-                    success=True,
-                    message=f"Address {address} removed from sanctions list",
-                    address=address,
-                    action=action,
-                    total_count=sanctions_checker.get_sanctioned_count()
-                )
-            else:
-                raise HTTPException(status_code=500, detail="Failed to remove address from sanctions list")
-                
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Sanctions management error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+	"""Add a wallet to sanctions list after Etherscan+Bitquery risk validation."""
+	try:
+		addr = address.lower().strip()
+		logger.info(f"Sanctions management (add) request for {addr} by {partner_id}")
+		# Validate address format
+		if not wallet_risk_assessor.is_valid_address(addr):
+			raise HTTPException(status_code=400, detail="Invalid address format")
+		# Already sanctioned?
+		is_currently_sanctioned = sanctions_checker.is_sanctioned(addr)
+		if is_currently_sanctioned:
+			return SanctionsResponse(
+				success=False,
+				message=f"Address {addr} is already in sanctions list",
+				address=addr,
+				action="add",
+				total_count=sanctions_checker.get_sanctioned_count()
+			)
+		# Risk assessment (ethereum by default)
+		risk_profile = await wallet_risk_assessor.assess_wallet_risk(addr, "ethereum")
+		if risk_profile.risk_score < 70:
+			raise HTTPException(status_code=400, detail=f"Insufficient risk (score: {risk_profile.risk_score}) to sanction")
+		if risk_profile.confidence < 0.6:
+			raise HTTPException(status_code=400, detail=f"Insufficient data confidence ({risk_profile.confidence:.2f}) to sanction")
+		# Add to sanctions
+		success = sanctions_checker.add_sanctioned_address(addr)
+		if not success:
+			raise HTTPException(status_code=500, detail="Failed to add address to sanctions list")
+		# Audit
+		await audit_logger.log_sanctions_action(
+			partner_id=partner_id,
+			action="ADD",
+			address=addr,
+			risk_score=risk_profile.risk_score,
+			risk_factors=risk_profile.risk_factors,
+			data_sources=risk_profile.data_sources,
+			reason=getattr(request, "reason", None)
+		)
+		return SanctionsResponse(
+			success=True,
+			message=f"Address {addr} added to sanctions list",
+			address=addr,
+			action="add",
+			risk_profile={
+				"risk_score": risk_profile.risk_score,
+				"confidence": risk_profile.confidence,
+				"risk_factors": risk_profile.risk_factors,
+				"data_sources": risk_profile.data_sources,
+				"transaction_count": risk_profile.transaction_count,
+				"total_volume": risk_profile.total_volume,
+				"last_activity": risk_profile.last_activity,
+				"suspicious_patterns": risk_profile.suspicious_patterns
+			},
+			total_count=sanctions_checker.get_sanctioned_count()
+		)
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.error(f"Sanctions management error: {e}")
+		raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/v1/sanctions/check/{address}")

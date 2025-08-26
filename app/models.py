@@ -5,31 +5,12 @@ from datetime import datetime
 # Existing models...
 
 class SanctionsManageRequest(BaseModel):
-    address: str = Field(..., description="Ethereum address to manage")
-    action: Literal["add", "remove"] = Field(..., description="Action to perform")
-    confirmation_code: Optional[str] = Field(None, description="Confirmation code required for removal")
-    reason: Optional[str] = Field(None, description="Optional reason for the action")
-    chain: str = Field("ethereum", description="Blockchain network")
-    
-    @validator('address')
-    def validate_address(cls, v):
-        if not v.startswith('0x') or len(v) != 42:
-            raise ValueError('Invalid Ethereum address format')
-        return v.lower()
-    
-    @validator('confirmation_code')
-    def validate_confirmation_code(cls, v, values):
-        if values.get('action') == 'remove' and not v:
-            raise ValueError('Confirmation code is required for removal actions')
-        return v
+    reason: Optional[str] = Field(None, description="Optional reason for adding the address to sanctions")
     
     class Config:
         schema_extra = {
             "example": {
-                "address": "0x742d35Cc6645C0532979A1f8A4D5fB2C61a8BaF6",
-                "action": "add",
-                "reason": "High risk wallet with suspicious transaction patterns",
-                "chain": "ethereum"
+                "reason": "High risk wallet with suspicious transaction patterns"
             }
         }
 
