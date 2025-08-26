@@ -63,7 +63,10 @@ class WalletRiskAssessor:
         
         # 1. Etherscan Analysis (Primary source)
         if self.etherscan_api_key:
-            etherscan_data = await self._analyze_etherscan(address, chain)
+            analyze = getattr(self, "_analyze_etherscan", None)
+            if analyze is None:
+                analyze = self.__analyze_etherscan_fallback
+            etherscan_data = await analyze(address, chain)
             if etherscan_data:
                 risk_factors.extend(etherscan_data["risk_factors"])
                 risk_score += etherscan_data["risk_score"]
@@ -78,7 +81,6 @@ class WalletRiskAssessor:
             bal = self._etherscan_balance(address)
             if bal is not None:
                 balance_eth = bal
-                # High balance can be a risk indicator in some contexts
                 if balance_eth > 1000:  # > 1000 ETH
                     risk_factors.append("Very high balance")
                     risk_score += 10
@@ -177,6 +179,60 @@ class WalletRiskAssessor:
             logger.warning(f"Etherscan balance fetch failed: {e}")
         return None
 
+    async def __analyze_etherscan_fallback(self, address: str, chain: str) -> Optional[Dict]:
+        """Fallback Etherscan analyzer used if _analyze_etherscan is not bound (safety)."""
+        try:
+            self._rate_limit("etherscan")
+            url = "https://api.etherscan.io/api"
+            params = {
+                "module": "account",
+                "action": "txlist",
+                "address": address,
+                "startblock": 0,
+                "endblock": 99999999,
+                "sort": "desc",
+                "apikey": self.etherscan_api_key
+            }
+            response = requests.get(url, params=params, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "1":
+                    transactions = data.get("result", [])
+                    return self._process_etherscan_data(transactions, address)
+        except Exception as e:
+            logger.error(f"Fallback Etherscan analysis failed: {e}")
+        return None
+
+    async def _analyze_etherscan(self, address: str, chain: str) -> Optional[Dict]:
+        """Analyze wallet using Etherscan API"""
+        try:
+            self._rate_limit("etherscan")
+            
+            url = "https://api.etherscan.io/api"
+            params = {
+                "module": "account",
+                "action": "txlist",
+                "address": address,
+                "startblock": 0,
+                "endblock": 99999999,
+                "sort": "desc",
+                "apikey": self.etherscan_api_key
+            }
+            
+            response = requests.get(url, params=params, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "1":
+                    transactions = data.get("result", [])
+                    return self._process_etherscan_data(transactions, address)
+                elif data.get("status") == "0":
+                    logger.warning(f"Etherscan API status=0: {data.get('message', 'Unknown error')}")
+            else:
+                logger.warning(f"Etherscan HTTP {response.status_code}: {response.text[:200]}")
+        except Exception as e:
+            logger.error(f"Etherscan analysis failed: {e}")
+        return None
+    
     def _bitquery_headers(self) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
@@ -331,7 +387,6 @@ class WalletRiskAssessor:
         risk_factors: List[str] = []
         risk_score = 0
         try:
-            # If there are many recent incoming transfers, flag
             transfers = (
                 data.get("data", {})
                     .get("ethereum", {})
