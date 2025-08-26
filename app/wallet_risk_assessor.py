@@ -36,7 +36,7 @@ class WalletRiskAssessor:
         # Load from env first, then Supabase secrets fallback
         self.etherscan_api_key = get_secret("ETHERSCAN_API_KEY", env_var="ETHERSCAN_API_KEY")
         # Bitquery uses Access Token (Bearer), not API key
-        self.bitquery_access_token = get_secret("BITQUERY_ACCESS_TOKEN", env_var="BITQUERY_ACCESS_TOKEN")
+        self.bitquery_token = get_secret("BITQUERY_TOKEN", env_var="BITQUERY_TOKEN")
         self.alchemy_api_key = get_secret("ALCHEMY_API_KEY", env_var="ALCHEMY_API_KEY")
         self.moralis_api_key = get_secret("MORALIS_API_KEY", env_var="MORALIS_API_KEY")
         self.covalent_api_key = get_secret("COVALENT_API_KEY", env_var="COVALENT_API_KEY")
@@ -84,7 +84,7 @@ class WalletRiskAssessor:
                     risk_score += 10
         
         # 2. Bitquery Analysis (Cross-chain data via Bearer token)
-        if self.bitquery_access_token:
+        if self.bitquery_token:
             bitquery_data = await self._analyze_bitquery(address, chain)
             if bitquery_data:
                 risk_factors.extend(bitquery_data["risk_factors"])
@@ -180,12 +180,12 @@ class WalletRiskAssessor:
     def _bitquery_headers(self) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.bitquery_access_token}"
+            "Authorization": f"Bearer {self.bitquery_token}"
         }
     
     async def _analyze_bitquery(self, address: str, chain: str) -> Optional[Dict]:
         """Analyze wallet using Bitquery (Bearer access token). Uses the standard GraphQL endpoint for summary."""
-        if not self.bitquery_access_token:
+        if not self.bitquery_token:
             return None
         try:
             self._rate_limit("bitquery")
