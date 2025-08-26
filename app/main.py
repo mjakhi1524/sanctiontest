@@ -639,21 +639,20 @@ async def manage_sanctions(
 ):
 	"""Add a wallet to sanctions list after Etherscan+Bitquery risk validation."""
 	try:
-		addr = address.lower().strip()
+		addr = (address or "").lower().strip()
 		logger.info(f"Sanctions management (add) request for {addr} by {partner_id}")
 		# Validate address format
 		if not wallet_risk_assessor.is_valid_address(addr):
 			raise HTTPException(status_code=400, detail="Invalid address format")
-		# Already sanctioned?
-		is_currently_sanctioned = sanctions_checker.is_sanctioned(addr)
-		if is_currently_sanctioned:
-			return SanctionsResponse(
-				success=False,
-				message=f"Address {addr} is already in sanctions list",
-				address=addr,
-				action="add",
-				total_count=sanctions_checker.get_sanctioned_count()
-			)
+		# Already sanctioned? quick exit
+		if sanctions_checker.is_sanctioned(addr):
+			return JSONResponse(status_code=409, content={
+				"success": False,
+				"message": f"Address {addr} is already in sanctions list",
+				"address": addr,
+				"action": "add",
+				"total_count": sanctions_checker.get_sanctioned_count()
+			})
 		# Risk assessment (ethereum by default)
 		risk_profile = await wallet_risk_assessor.assess_wallet_risk(addr, "ethereum")
 		if risk_profile.risk_score < 70:

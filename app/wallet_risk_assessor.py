@@ -4,7 +4,7 @@ import os
 import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ class WalletRiskAssessor:
     async def assess_wallet_risk(self, address: str, chain: str = "ethereum") -> WalletRiskProfile:
         """Comprehensive risk assessment using multiple data sources"""
         
+        addr = (address or "").lower()
         risk_factors: List[str] = []
         data_sources: List[str] = []
         confidence = 0.0
@@ -59,82 +60,118 @@ class WalletRiskAssessor:
         suspicious_patterns: List[str] = []
         balance_eth: Optional[float] = None
         
-        logger.info(f"Starting risk assessment for {address} on {chain}")
+        logger.info(f"Starting risk assessment for {addr} on {chain}")
         
         # 1. Etherscan Analysis (Primary source)
         if self.etherscan_api_key:
-            analyze = getattr(self, "_analyze_etherscan", None)
-            if analyze is None:
-                analyze = self.__analyze_etherscan_fallback
-            etherscan_data = await analyze(address, chain)
+            etherscan_data = await self._analyze_etherscan(addr, chain) or await self.__analyze_etherscan_fallback(addr, chain)
             if etherscan_data:
-                risk_factors.extend(etherscan_data["risk_factors"])
-                risk_score += etherscan_data["risk_score"]
                 data_sources.append("etherscan")
                 confidence += 0.4
                 transaction_count = etherscan_data.get("transaction_count", 0)
                 total_volume = etherscan_data.get("total_volume", "0")
                 last_activity = etherscan_data.get("last_activity")
                 suspicious_patterns.extend(etherscan_data.get("suspicious_patterns", []))
-                
-            # Also fetch balance from Etherscan
-            bal = self._etherscan_balance(address)
+                # Heuristics: any history
+                if transaction_count > 0:
+                    risk_factors.append("Has transaction history")
+                    risk_score += 10
+                # Total value tiers (ETH)
+                try:
+                    total_eth = float(total_volume) / 1e18 if float(total_volume) > 1e6 else float(total_volume)
+                except Exception:
+                    total_eth = 0.0
+                if total_eth > 10:
+                    risk_factors.append("Total value > 10 ETH")
+                    risk_score += 15
+                if total_eth > 100:
+                    risk_factors.append("Total value > 100 ETH")
+                    risk_score += 10
+                # Recent activity within 30 days
+                if last_activity:
+                    try:
+                        last_dt = datetime.fromisoformat(last_activity.replace("Z", "+00:00"))
+                        if (datetime.now(timezone.utc) - last_dt).days <= 30:
+                            risk_factors.append("Recent activity < 30d")
+                            risk_score += 15
+                    except Exception:
+                        pass
+                # Suspicious patterns from analyzer
+                if suspicious_patterns:
+                    risk_factors.extend(suspicious_patterns)
+                    risk_score += len(suspicious_patterns) * 5
+            
+            # Balance tiers
+            bal = self._etherscan_balance(addr)
             if bal is not None:
                 balance_eth = bal
-                if balance_eth > 1000:  # > 1000 ETH
-                    risk_factors.append("Very high balance")
+                if balance_eth > 10:
+                    risk_factors.append("Balance > 10 ETH")
+                    risk_score += 10
+                if balance_eth > 100:
+                    risk_factors.append("Balance > 100 ETH")
                     risk_score += 10
         
         # 2. Bitquery Analysis (Cross-chain data via Bearer token)
         if self.bitquery_token:
-            bitquery_data = await self._analyze_bitquery(address, chain)
+            bitquery_data = await self._analyze_bitquery(addr, chain)
             if bitquery_data:
-                risk_factors.extend(bitquery_data["risk_factors"])
-                risk_score += bitquery_data["risk_score"]
                 data_sources.append("bitquery")
                 confidence += 0.3
-                
-        # 3. Free Alternative: Blockchain.com API
-        blockchain_data = await self._analyze_blockchain_com(address, chain)
+                # Transfer count tiers if provided
+                try:
+                    t_count = bitquery_data.get("transfer_count", 0)
+                except Exception:
+                    t_count = 0
+                if t_count > 10:
+                    risk_factors.append("Bitquery transfers > 10")
+                    risk_score += 10
+                if t_count > 100:
+                    risk_factors.append("Bitquery transfers > 100")
+                    risk_score += 10
+                # Risk factors from processing
+                rf = bitquery_data.get("risk_factors", [])
+                if rf:
+                    risk_factors.extend(rf)
+                    risk_score += bitquery_data.get("risk_score", 0)
+        
+        # 3. Optional: free sources
+        blockchain_data = await self._analyze_blockchain_com(addr, chain)
         if blockchain_data:
-            risk_factors.extend(blockchain_data["risk_factors"])
-            risk_score += blockchain_data["risk_score"]
             data_sources.append("blockchain.com")
             confidence += 0.2
-            
-        # 4. Free Alternative: Covalent API
+            risk_factors.extend(blockchain_data["risk_factors"])
+            risk_score += blockchain_data["risk_score"]
+        
         if self.covalent_api_key:
-            covalent_data = await self._analyze_covalent(address, chain)
+            covalent_data = await self._analyze_covalent(addr, chain)
             if covalent_data:
-                risk_factors.extend(covalent_data["risk_factors"])
-                risk_score += covalent_data["risk_score"]
                 data_sources.append("covalent")
                 confidence += 0.1
-                
-        # 5. Free Alternative: Tatum API
+                risk_factors.extend(covalent_data["risk_factors"])
+                risk_score += covalent_data["risk_score"]
+        
         if self.tatum_api_key:
-            tatum_data = await self._analyze_tatum(address, chain)
+            tatum_data = await self._analyze_tatum(addr, chain)
             if tatum_data:
-                risk_factors.extend(tatum_data["risk_factors"])
-                risk_score += tatum_data["risk_score"]
                 data_sources.append("tatum")
                 confidence += 0.1
+                risk_factors.extend(tatum_data["risk_factors"])
+                risk_score += tatum_data["risk_score"]
         
-        # Remove duplicate risk factors
-        risk_factors = list(set(risk_factors))
-        suspicious_patterns = list(set(suspicious_patterns))
+        # Deduplicate
+        risk_factors = list(dict.fromkeys(risk_factors))
+        suspicious_patterns = list(dict.fromkeys(suspicious_patterns))
         
-        # Normalize risk score (0-100)
-        risk_score = min(100, max(0, risk_score))
-        
-        # Ensure minimum confidence if we have some data
+        # Clamp
+        risk_score = min(100, max(0, int(risk_score)))
         if data_sources:
             confidence = max(confidence, 0.1)
         
-        logger.info(f"Risk assessment complete for {address}: Score={risk_score}, Confidence={confidence:.2f}")
+        logger.info(f"Risk assessment complete for {addr}: Score={risk_score}, Confidence={confidence:.2f}")
         
         return WalletRiskProfile(
-            address=address,
+            address=addr,
             risk_score=risk_score,
             risk_factors=risk_factors,
             confidence=confidence,
